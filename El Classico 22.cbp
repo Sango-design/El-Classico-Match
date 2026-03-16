@@ -1,41 +1,662 @@
-<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
-<CodeBlocks_project_file>
-	<FileVersion major="1" minor="6" />
-	<Project>
-		<Option title="El Classico 22" />
-		<Option pch_mode="2" />
-		<Option compiler="gcc" />
-		<Build>
-			<Target title="Debug">
-				<Option output="bin/Debug/El Classico 22" prefix_auto="1" extension_auto="1" />
-				<Option object_output="obj/Debug/" />
-				<Option type="1" />
-				<Option compiler="gcc" />
-				<Compiler>
-					<Add option="-g" />
-				</Compiler>
-			</Target>
-			<Target title="Release">
-				<Option output="bin/Release/El Classico 22" prefix_auto="1" extension_auto="1" />
-				<Option object_output="obj/Release/" />
-				<Option type="1" />
-				<Option compiler="gcc" />
-				<Compiler>
-					<Add option="-O2" />
-				</Compiler>
-				<Linker>
-					<Add option="-s" />
-				</Linker>
-			</Target>
-		</Build>
-		<Compiler>
-			<Add option="-Wall" />
-		</Compiler>
-		<Unit filename="main.c">
-			<Option compilerVar="CC" />
-		</Unit>
-		<Extensions>
-			<lib_finder disable_auto="1" />
-		</Extensions>
-	</Project>
-</CodeBlocks_project_file>
+/*
+ * ============================================================
+ *   FOOTBALL TEAM MANAGEMENT SYSTEM
+ *
+ *   DATA STRUCTURES USED:
+ *   -------------------------------------------------------
+ *   STACK  - Used for the substitute bench.
+ *            A Stack works on LIFO principle:
+ *            Last In, First Out.
+ *            The last substitute added to the bench is the
+ *            first one available to come onto the field.
+ *            Operations: stackPush, stackPop, stackInit
+ *
+ *   QUEUE  - Used for spectator entry at the gate.
+ *            A Queue works on FIFO principle:
+ *            First In, First Out.
+ *            The first spectator to arrive at the gate is
+ *            the first one to enter the stadium.
+ *            Operations: queueEnqueue, queueDequeue, queueInit
+ * ============================================================
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* --- CONSTANTS --- */
+#define MAX_ACTIVE        11
+#define MAX_SUBSTITUTES   10
+#define NAME_LEN          40
+#define MIN_SPECTATORS    1000000
+#define QUEUE_CAPACITY    5000
+
+/* ============================================================
+ *  STRUCTURES
+ * ============================================================ */
+
+typedef struct {
+    int  id;
+    char name[NAME_LEN];
+    int  jerseyNumber;
+    char position[20];
+    int  isActive;
+} Player;
+
+typedef struct {
+    char name[NAME_LEN];
+    char nationality[30];
+} Coach;
+
+typedef struct {
+    char matchName[60];
+    char venue[60];
+    char date[20];
+    char homeTeam[40];
+    char awayTeam[40];
+    int  homeScore;
+    int  awayScore;
+    int  duration;
+    int  spectators;
+} Match;
+
+/*
+ * -----------------------------------------------------------
+ *  STACK STRUCTURE - Substitute Bench
+ * -----------------------------------------------------------
+ *  Visual of a Stack (LIFO):
+ *
+ *  top --> [ Mascherano      ]  <- last pushed, first popped
+ *          [ Ivan Rakitic    ]
+ *          [ Lamine Yamal    ]
+ *          [ Pedri Gonzalez  ]
+ *          [ Fermin Lopez    ]
+ *          [ Cubarsi         ]
+ *          [ Ter Stegen      ]
+ *          [ Raphinha        ]
+ *          [ Luis Suarez     ]
+ *  bot --> [ R. Lewandowski  ]  <- first pushed, last popped
+ *
+ *  top = index of the topmost player (-1 means empty)
+ * -----------------------------------------------------------
+ */
+typedef struct {
+    Player data[MAX_SUBSTITUTES];
+    int    top;
+} SubstituteStack;
+
+/*
+ * -----------------------------------------------------------
+ *  QUEUE STRUCTURE - Spectator Gate Entry
+ * -----------------------------------------------------------
+ *  Visual of a Queue (FIFO):
+ *
+ *  ENTRY -->  [Fan1][Fan2][Fan3][Fan4]...[FanN]  --> EXIT
+ *              ^                              ^
+ *            front                          rear
+ *
+ *  Fans enqueue (enter) at the rear.
+ *  Fans dequeue (exit/counted) from the front.
+ * -----------------------------------------------------------
+ */
+typedef struct {
+    int data[QUEUE_CAPACITY];
+    int front;
+    int rear;
+    int size;
+    int totalEntered;
+} SpectatorQueue;
+
+/* --- GLOBALS --- */
+Player          activePlayers[MAX_ACTIVE];
+SubstituteStack bench;
+SpectatorQueue  gate;
+Coach           coach;
+Match           match;
+int             activeCount = 0;
+
+/* ============================================================
+ *  STACK OPERATIONS
+ * ============================================================ */
+
+void stackInit(SubstituteStack *s) {
+    s->top = -1;
+}
+
+int stackIsFull(SubstituteStack *s) {
+    return s->top == MAX_SUBSTITUTES - 1;
+}
+
+int stackIsEmpty(SubstituteStack *s) {
+    return s->top == -1;
+}
+
+int stackPush(SubstituteStack *s, Player p) {
+    if (stackIsFull(s)) {
+        printf("Bench is full! Cannot add more substitutes.\n");
+        return 0;
+    }
+    s->top++;
+    s->data[s->top] = p;
+    return 1;
+}
+
+Player stackPop(SubstituteStack *s) {
+    Player empty = {0};
+    if (stackIsEmpty(s)) {
+        printf("Bench is empty! No substitutes available.\n");
+        return empty;
+    }
+    Player p = s->data[s->top];
+    s->top--;
+    return p;
+}
+
+Player stackRemoveByJersey(SubstituteStack *s, int jersey, int *found) {
+    Player empty = {0};
+    Player result = empty;
+    SubstituteStack temp;
+    stackInit(&temp);
+    *found = 0;
+
+    while (!stackIsEmpty(s)) {
+        Player p = stackPop(s);
+        if (p.jerseyNumber == jersey && !(*found)) {
+            result = p;
+            *found = 1;
+        } else {
+            stackPush(&temp, p);
+        }
+    }
+    while (!stackIsEmpty(&temp))
+        stackPush(s, stackPop(&temp));
+
+    return result;
+}
+
+/* ============================================================
+ *  QUEUE OPERATIONS
+ * ============================================================ */
+
+void queueInit(SpectatorQueue *q) {
+    q->front        = 0;
+    q->rear         = 0;
+    q->size         = 0;
+    q->totalEntered = 0;
+}
+
+int queueIsFull(SpectatorQueue *q) {
+    return q->size == QUEUE_CAPACITY;
+}
+
+int queueIsEmpty(SpectatorQueue *q) {
+    return q->size == 0;
+}
+
+void queueEnqueue(SpectatorQueue *q, int spectatorID) {
+    if (queueIsFull(q)) {
+        printf("Gate queue is full!\n");
+        return;
+    }
+    q->data[q->rear] = spectatorID;
+    q->rear  = (q->rear + 1) % QUEUE_CAPACITY;
+    q->size++;
+    q->totalEntered++;
+}
+
+int queueDequeue(SpectatorQueue *q) {
+    if (queueIsEmpty(q)) {
+        return -1;
+    }
+    int spectatorID = q->data[q->front];
+    q->front = (q->front + 1) % QUEUE_CAPACITY;
+    q->size--;
+    return spectatorID;
+}
+
+/* ============================================================
+ *  FUNCTION 1 - INITIALIZE TEAM
+ * ============================================================ */
+void initializeTeam(void) {
+    strcpy(coach.name,        "Pep Guardiola");
+    strcpy(coach.nationality, "Spanish");
+
+    strcpy(match.matchName, "FC Barcelona League Match");
+    strcpy(match.venue,     "Camp Nou");
+    strcpy(match.date,      "2026-03-08");
+    strcpy(match.homeTeam,  "FC Barcelona");
+    strcpy(match.awayTeam,  "Real Madrid");
+    match.homeScore  = 0;
+    match.awayScore  = 0;
+    match.duration   = 90;
+    match.spectators = 0;
+
+    const char *aNames[MAX_ACTIVE] = {
+        "Victor Valdes",   "Jordi Alba",      "Dani Alves",
+        "Carles Puyol",    "Gerard Pique",    "Xavi Hernandez",
+        "Sergio Busquets", "Andres Iniesta",  "Samuel Eto'o",
+        "Lionel Messi",    "Neymar Jnr"
+    };
+    const char *aPos[MAX_ACTIVE] = {
+        "Goalkeeper", "Defender",   "Defender",
+        "Defender",   "Defender",   "Midfielder",
+        "Midfielder", "Midfielder", "Forward",
+        "Forward",    "Forward"
+    };
+    for (int i = 0; i < MAX_ACTIVE; i++) {
+        activePlayers[i].id           = i + 1;
+        strcpy(activePlayers[i].name, aNames[i]);
+        activePlayers[i].jerseyNumber = i + 1;
+        strcpy(activePlayers[i].position, aPos[i]);
+        activePlayers[i].isActive     = 1;
+    }
+    activeCount = MAX_ACTIVE;
+
+    stackInit(&bench);
+    const char *sNames[MAX_SUBSTITUTES] = {
+        "Robert Lewandowski", "Luis Suarez",   "Raphinha",
+        "Ter Stegen",         "Cubarsi",       "Fermin Lopez",
+        "Pedri Gonzalez",     "Lamine Yamal",  "Ivan Rakitic",
+        "Mascherano"
+    };
+    const char *sPos[MAX_SUBSTITUTES] = {
+        "Forward",    "Forward",    "Forward",
+        "Goalkeeper", "Defender",   "Midfielder",
+        "Midfielder", "Forward",    "Midfielder",
+        "Midfielder"
+    };
+    for (int i = 0; i < MAX_SUBSTITUTES; i++) {
+        Player p;
+        p.id           = MAX_ACTIVE + i + 1;
+        strcpy(p.name, sNames[i]);
+        p.jerseyNumber = MAX_ACTIVE + i + 1;
+        strcpy(p.position, sPos[i]);
+        p.isActive     = 0;
+        stackPush(&bench, p);
+    }
+
+    queueInit(&gate);
+}
+
+/* ============================================================
+ *  DISPLAY STACK STATE
+ * ============================================================ */
+void displayStackState(void) {
+    printf("\n  BENCH STACK STATE (LIFO - top to bottom):\n");
+    printf("  Stack top index = %d  (total = %d players)\n",
+           bench.top, bench.top + 1);
+    printf("  +----------------------------------+\n");
+    if (stackIsEmpty(&bench)) {
+        printf("  |         (stack is empty)         |\n");
+    } else {
+        for (int i = bench.top; i >= 0; i--) {
+            if (i == bench.top)
+                printf("  | [TOP] #%-3d %-22s|\n",
+                       bench.data[i].jerseyNumber, bench.data[i].name);
+            else if (i == 0)
+                printf("  | [BOT] #%-3d %-22s|\n",
+                       bench.data[i].jerseyNumber, bench.data[i].name);
+            else
+                printf("  |       #%-3d %-22s|\n",
+                       bench.data[i].jerseyNumber, bench.data[i].name);
+        }
+    }
+    printf("  +----------------------------------+\n");
+}
+
+/* ============================================================
+ *  DISPLAY QUEUE STATE
+ * ============================================================ */
+void displayQueueState(void) {
+    printf("\n  SPECTATOR GATE QUEUE STATE (FIFO):\n");
+    printf("  Total entered so far: %d\n", gate.totalEntered);
+    printf("  Currently in queue  : %d\n", gate.size);
+    printf("  front index = %d  |  rear index = %d\n",
+           gate.front, gate.rear);
+
+    if (queueIsEmpty(&gate)) {
+        printf("  Queue: (empty - all spectators have been processed)\n");
+    } else {
+        printf("  Queue (front --> rear):\n  ");
+        int count = 0;
+        int idx = gate.front;
+        while (count < gate.size && count < 10) {
+            printf("[Fan#%d]", gate.data[idx]);
+            idx = (idx + 1) % QUEUE_CAPACITY;
+            count++;
+        }
+        if (gate.size > 10)
+            printf("... (+%d more)", gate.size - 10);
+        printf("\n");
+    }
+}
+
+/* ============================================================
+ *  FUNCTION 2 - DISPLAY TEAM
+ * ============================================================ */
+void displayTeam(void) {
+    printf("\n============================================================\n");
+    printf("   TEAM  : %s\n", match.homeTeam);
+    printf("   COACH : %s (%s)\n", coach.name, coach.nationality);
+    printf("   MATCH : %s vs %s\n", match.homeTeam, match.awayTeam);
+    printf("   VENUE : %s  |  DATE: %s\n", match.venue, match.date);
+    printf("   SCORE : %s %d - %d %s\n",
+           match.homeTeam, match.homeScore,
+           match.awayScore, match.awayTeam);
+    printf("============================================================\n");
+
+    printf("\n  ACTIVE PLAYERS ON FIELD (%d/11)\n", activeCount);
+    printf("  %-4s %-25s %-6s %-15s\n", "No.", "Name", "Jersey", "Position");
+    printf("  ----------------------------------------------------------\n");
+    for (int i = 0; i < MAX_ACTIVE; i++) {
+        if (activePlayers[i].isActive)
+            printf("  %-4d %-25s %-6d %-15s\n",
+                   i + 1,
+                   activePlayers[i].name,
+                   activePlayers[i].jerseyNumber,
+                   activePlayers[i].position);
+    }
+
+    displayStackState();
+    displayQueueState();
+}
+
+/* ============================================================
+ *  FUNCTION 3 - CHANGE (UPDATE) A PLAYER
+ * ============================================================ */
+void changePlayer(void) {
+    int jersey;
+    printf("\n--- CHANGE PLAYER ---\n");
+    printf("Enter jersey number of player to change: ");
+    scanf("%d", &jersey);
+    getchar();
+
+    for (int i = 0; i < MAX_ACTIVE; i++) {
+        if (activePlayers[i].jerseyNumber == jersey && activePlayers[i].isActive) {
+            printf("Found (Active): %s | %s\n",
+                   activePlayers[i].name, activePlayers[i].position);
+
+            char newName[NAME_LEN];
+            printf("Enter new name (press Enter to keep current): ");
+            fgets(newName, NAME_LEN, stdin);
+            newName[strcspn(newName, "\n")] = 0;
+            if (strlen(newName) > 0)
+                strcpy(activePlayers[i].name, newName);
+
+            char newPos[20];
+            printf("Enter new position (press Enter to keep current): ");
+            fgets(newPos, 20, stdin);
+            newPos[strcspn(newPos, "\n")] = 0;
+            if (strlen(newPos) > 0)
+                strcpy(activePlayers[i].position, newPos);
+
+            printf("Updated -> Name: %s | Position: %s\n",
+                   activePlayers[i].name, activePlayers[i].position);
+            return;
+        }
+    }
+
+    for (int i = 0; i <= bench.top; i++) {
+        if (bench.data[i].jerseyNumber == jersey) {
+            printf("Found (Bench): %s | %s\n",
+                   bench.data[i].name, bench.data[i].position);
+
+            char newName[NAME_LEN];
+            printf("Enter new name (press Enter to keep current): ");
+            fgets(newName, NAME_LEN, stdin);
+            newName[strcspn(newName, "\n")] = 0;
+            if (strlen(newName) > 0)
+                strcpy(bench.data[i].name, newName);
+
+            char newPos[20];
+            printf("Enter new position (press Enter to keep current): ");
+            fgets(newPos, 20, stdin);
+            newPos[strcspn(newPos, "\n")] = 0;
+            if (strlen(newPos) > 0)
+                strcpy(bench.data[i].position, newPos);
+
+            printf("Updated -> Name: %s | Position: %s\n",
+                   bench.data[i].name, bench.data[i].position);
+            return;
+        }
+    }
+
+    printf("No player found with jersey #%d.\n", jersey);
+}
+
+/* ============================================================
+ *  FUNCTION 4 - SUBSTITUTION (up to 4 players at once)
+ * ============================================================ */
+void doSubstitution(void) {
+    printf("\n--- SUBSTITUTION (up to 4 players) ---\n");
+
+    if (stackIsEmpty(&bench)) {
+        printf("No substitutes available on bench!\n");
+        return;
+    }
+
+    int numSubs;
+    printf("How many substitutions do you want to make? (1-4): ");
+    scanf("%d", &numSubs);
+
+    if (numSubs < 1 || numSubs > 4) {
+        printf("Invalid number. You can only make 1 to 4 substitutions.\n");
+        return;
+    }
+
+    if (bench.top + 1 < numSubs) {
+        printf("Not enough players on bench. Only %d available.\n", bench.top + 1);
+        return;
+    }
+
+    int subsMade = 0;
+
+    for (int s = 0; s < numSubs; s++) {
+        printf("\n  --- Substitution %d of %d ---\n", s + 1, numSubs);
+
+        printf("\n  ACTIVE PLAYERS (choose who goes OUT):\n");
+        printf("  %-6s %-25s %-15s\n", "Jersey", "Name", "Position");
+        printf("  --------------------------------------------------\n");
+        for (int i = 0; i < MAX_ACTIVE; i++) {
+            if (activePlayers[i].isActive)
+                printf("  %-6d %-25s %-15s\n",
+                       activePlayers[i].jerseyNumber,
+                       activePlayers[i].name,
+                       activePlayers[i].position);
+        }
+
+        int outJersey;
+        printf("\n  Enter jersey number of player to send OUT: ");
+        scanf("%d", &outJersey);
+
+        int outIdx = -1;
+        for (int i = 0; i < MAX_ACTIVE; i++) {
+            if (activePlayers[i].jerseyNumber == outJersey && activePlayers[i].isActive) {
+                outIdx = i;
+                break;
+            }
+        }
+        if (outIdx == -1) {
+            printf("  No active player found with jersey #%d. Skipping.\n", outJersey);
+            continue;
+        }
+
+        displayStackState();
+
+        int inJersey;
+        printf("\n  Enter jersey number of player to bring IN: ");
+        scanf("%d", &inJersey);
+
+        int found = 0;
+        Player sub = stackRemoveByJersey(&bench, inJersey, &found);
+
+        if (!found) {
+            printf("  No bench player found with jersey #%d. Skipping.\n", inJersey);
+            continue;
+        }
+
+        printf("\n  SUBSTITUTION %d MADE:\n", s + 1);
+        printf("    OUT : %-25s (Jersey #%d | %s)\n",
+               activePlayers[outIdx].name,
+               activePlayers[outIdx].jerseyNumber,
+               activePlayers[outIdx].position);
+        printf("    IN  : %-25s (Jersey #%d | %s)\n",
+               sub.name, sub.jerseyNumber, sub.position);
+        printf("    Referee signals the substitution. Crowd cheers!\n");
+
+        sub.isActive = 1;
+        activePlayers[outIdx] = sub;
+        activePlayers[outIdx].isActive = 1;
+        subsMade++;
+    }
+
+    printf("\n============================================================\n");
+    printf("  SUBSTITUTION SUMMARY: %d substitution(s) made.\n", subsMade);
+    printf("  Substitutes remaining on bench: %d\n", bench.top + 1);
+    printf("============================================================\n");
+
+    printf("\n  Final bench after substitutions:");
+    displayStackState();
+}
+
+/* ============================================================
+ *  FUNCTION 5 - DELETE A PLAYER FROM BENCH
+ * ============================================================ */
+void deletePlayer(void) {
+    printf("\n--- DELETE PLAYER FROM BENCH ---\n");
+
+    if (stackIsEmpty(&bench)) {
+        printf("Bench is empty. Nothing to delete.\n");
+        return;
+    }
+
+    displayStackState();
+
+    int jersey;
+    printf("\nEnter jersey number of bench player to delete: ");
+    scanf("%d", &jersey);
+
+    int found = 0;
+    stackRemoveByJersey(&bench, jersey, &found);
+
+    if (!found)
+        printf("No bench player found with jersey #%d.\n", jersey);
+    else {
+        printf("Player deleted from bench.\n");
+        printf("Bench size now: %d\n", bench.top + 1);
+        displayStackState();
+    }
+}
+
+/* ============================================================
+ *  FUNCTION 6 - SPECTATOR INPUT AND DISPLAY
+ * ============================================================ */
+void inputSpectators(void) {
+    printf("\n--- SPECTATOR COUNT ---\n");
+    printf("Enter number of spectators: ");
+    int total;
+    scanf("%d", &total);
+    match.spectators = total;
+
+    queueInit(&gate);
+    int toQueue = total < QUEUE_CAPACITY ? total : QUEUE_CAPACITY;
+    for (int i = 1; i <= toQueue; i++)
+        queueEnqueue(&gate, i);
+
+    printf("\n  %d spectators have joined the gate queue.\n", toQueue);
+    displayQueueState();
+
+    printf("\n  Processing spectators through the gate...\n");
+    int processed = 0;
+    while (!queueIsEmpty(&gate)) {
+        queueDequeue(&gate);
+        processed++;
+    }
+
+    printf("  All %d spectators processed.\n", processed);
+    displayQueueState();
+
+    printf("\n");
+    if (total > MIN_SPECTATORS) {
+        printf("ANNOUNCEMENT: %d spectators attended the match today!\n", total);
+    } else {
+        printf("Not Expected spectators.\n");
+    }
+}
+
+/* ============================================================
+ *  FUNCTION 7 - UPDATE SCORE
+ * ============================================================ */
+void updateScore(void) {
+    printf("\n--- UPDATE SCORE ---\n");
+    printf("  Current score: %s %d - %d %s\n",
+           match.homeTeam, match.homeScore,
+           match.awayScore, match.awayTeam);
+
+    int teamChoice;
+    printf("\n  Which team scored?\n");
+    printf("  1. %s (Home)\n", match.homeTeam);
+    printf("  2. %s (Away)\n", match.awayTeam);
+    printf("  Enter choice: ");
+    scanf("%d", &teamChoice);
+
+    if (teamChoice == 1) {
+        match.homeScore++;
+        printf("\n  GOAL! %s scores!\n", match.homeTeam);
+    } else if (teamChoice == 2) {
+        match.awayScore++;
+        printf("\n  GOAL! %s scores!\n", match.awayTeam);
+    } else {
+        printf("  Invalid choice. Score not updated.\n");
+        return;
+    }
+
+    printf("  Updated score: %s %d - %d %s\n",
+           match.homeTeam, match.homeScore,
+           match.awayScore, match.awayTeam);
+}
+
+/* ============================================================
+ *  MAIN MENU
+ * ============================================================ */
+int main(void) {
+    initializeTeam();
+
+    printf("============================================================\n");
+    printf("   FOOTBALL TEAM MANAGEMENT SYSTEM\n");
+    printf("   FC Barcelona Squad\n");
+    printf("   Stack = Substitute Bench (LIFO)\n");
+    printf("   Queue = Spectator Gate Entry (FIFO)\n");
+    printf("============================================================\n");
+
+    int choice;
+    do {
+        printf("\n------------------------------------------------------------\n");
+        printf("   MAIN MENU\n");
+        printf("------------------------------------------------------------\n");
+        printf("  1. Display Team\n");
+        printf("  2. Change a Player\n");
+        printf("  3. Do a Substitution\n");
+        printf("  4. Delete a Player from Bench\n");
+        printf("  5. Input Spectators\n");
+        printf("  6. Update Score\n");
+        printf("  0. Exit\n");
+        printf("------------------------------------------------------------\n");
+        printf("Enter choice: ");
+        scanf("%d", &choice);
+
+        switch (choice) {
+            case 1: displayTeam();     break;
+            case 2: changePlayer();    break;
+            case 3: doSubstitution();  break;
+            case 4: deletePlayer();    break;
+            case 5: inputSpectators(); break;
+            case 6: updateScore();     break;
+            case 0: printf("\nExiting. Good game!\n"); break;
+            default: printf("Invalid choice. Enter 0 to 6.\n");
+        }
+
+    } while (choice != 0);
+
+    return 0;
+}
